@@ -1,4 +1,4 @@
-// pages/api/analyze.js - FIXED VERSION
+// pages/api/analyze.js - Using CoinGecko (More Reliable)
 
 export default async function handler(req, res) {
   // Enable CORS
@@ -13,30 +13,46 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Fetch real BTC price from Binance
-    const binanceResponse = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT');
+    // Fetch real BTC price from CoinGecko (Free, no API key needed)
+    const priceResponse = await fetch(
+      'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true&include_market_cap=true',
+      { headers: { 'Accept': 'application/json' } }
+    );
     
-    if (!binanceResponse.ok) {
-      throw new Error('Binance API failed');
+    if (!priceResponse.ok) {
+      throw new Error('CoinGecko API failed');
     }
     
-    const binanceData = await binanceResponse.json();
+    const priceData = await priceResponse.json();
     
-    const currentPrice = parseFloat(binanceData.lastPrice);
-    const change24h = parseFloat(binanceData.priceChangePercent);
-    const volume24h = parseFloat(binanceData.quoteVolume);
-    const high24h = parseFloat(binanceData.highPrice);
-    const low24h = parseFloat(binanceData.lowPrice);
-    
-    // Fetch hourly candles for technical analysis
-    const candlesResponse = await fetch('https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=100');
-    
-    if (!candlesResponse.ok) {
-      throw new Error('Failed to fetch candles');
+    if (!priceData.bitcoin) {
+      throw new Error('Invalid response from CoinGecko');
     }
     
-    const candles = await candlesResponse.json();
-    const closePrices = candles.map(c => parseFloat(c[4]));
+    const currentPrice = priceData.bitcoin.usd;
+    const change24h = priceData.bitcoin.usd_24h_change || 0;
+    const volume24h = priceData.bitcoin.usd_24h_vol || 0;
+    const marketCap = priceData.bitcoin.usd_market_cap || 0;
+    
+    // Fetch historical data for technical analysis
+    const historyResponse = await fetch(
+      'https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=7&interval=hourly',
+      { headers: { 'Accept': 'application/json' } }
+    );
+    
+    if (!historyResponse.ok) {
+      throw new Error('Failed to fetch historical data');
+    }
+    
+    const historyData = await historyResponse.json();
+    
+    // Extract last 100 hourly prices
+    const closePrices = historyData.prices.slice(-100).map(p => p[1]);
+    
+    // Calculate high and low from recent data
+    const recentPrices = historyData.prices.slice(-24).map(p => p[1]);
+    const high24h = Math.max(...recentPrices);
+    const low24h = Math.min(...recentPrices);
     
     // Calculate RSI
     const rsi = calculateRSI(closePrices, 14);
@@ -62,12 +78,14 @@ export default async function handler(req, res) {
     return res.status(200).json({
       success: true,
       timestamp: new Date().toISOString(),
+      source: 'CoinGecko',
       market: {
         price: currentPrice,
         change24h: change24h,
         volume24h: volume24h,
         high24h: high24h,
         low24h: low24h,
+        marketCap: marketCap,
         support: support,
         resistance: resistance
       },
@@ -86,7 +104,8 @@ export default async function handler(req, res) {
     return res.status(500).json({ 
       success: false,
       error: 'Failed to fetch data', 
-      message: error.message 
+      message: error.message,
+      details: 'Using CoinGecko API - if this persists, the API may be rate-limited'
     });
   }
 }
